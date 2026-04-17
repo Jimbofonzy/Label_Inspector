@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Label Inspector - Camera Edition</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f9; padding: 15px; margin: 0; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        
+        /* Camera Section */
+        #camera-section { text-align: center; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 20px; position: relative; }
+        video { width: 100%; max-height: 400px; background: #222; }
+        .camera-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border: 2px dashed rgba(255,255,255,0.5); width: 80%; height: 60%; pointer-events: none; }
+        
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .upload-box { border: 1px solid #ddd; padding: 10px; border-radius: 8px; text-align: center; }
+        canvas { max-width: 100%; height: auto; border-radius: 4px; display: block; margin: 10px auto; }
+        
+        .status { padding: 10px; margin-bottom: 15px; border-radius: 6px; font-weight: bold; text-align: center; }
+        .loading { background: #fff3cd; color: #856404; }
+        .ready { background: #d4edda; color: #155724; }
+        
+        .btn { border: none; padding: 15px; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; transition: 0.2s; }
+        .btn-capture { background: #ff4757; color: white; width: 100%; margin-bottom: 10px; }
+        .btn-compare { background: #007bff; color: white; width: 100%; }
+        .btn-download { background: #2ed573; color: white; width: 100%; margin-top: 15px; display: none; }
+        .btn:disabled { background: #ccc; }
+        
+        #canvasOutput { border: 3px solid #007bff; width: 100%; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>📸 Label Inspector</h2>
+    <div id="status" class="status loading">⏳ Loading OpenCV...</div>
+
+    <!-- Live Camera -->
+    <div id="camera-section">
+        <video id="video" autoplay playsinline></video>
+        <div class="camera-overlay"></div>
+    </div>
+    <button id="captureBtn" class="btn btn-capture">📸 Take Photo of Label</button>
+
+    <div class="controls">
+        <div class="upload-box">
+            <label>1. Master (Template)</label>
+            <input type="file" id="masterUpload" accept="image/*">
+            <canvas id="canvasMaster"></canvas>
+        </div>
+        <div class="upload-box">
+            <label>2. Captured Photo</label>
+            <canvas id="canvasTest"></canvas>
+        </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+        <label>Sensitivity (Ignore Shadows):</label>
+        <input type="range" id="sensitivity" min="10" max="150" value="60" style="width:100%">
+    </div>
+
+    <button id="compareBtn" class="btn btn-compare" disabled>Compare Now</button>
+    <canvas id="canvasOutput"></canvas>
+    <button id="downloadBtn" class="btn btn-download">💾 Download Result</button>
+</div>
+
+<!-- Load OpenCV.js -->
+<script async src="https://opencv.org" onload="onOpenCvReady();"></script>
+
+<script>
+    const video = document.getElementById('video');
+    const captureBtn = document.getElementById('captureBtn');
+    const compareBtn = document.getElementById('compareBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const canvasTest = document.getElementById('canvasTest');
+    const status = document.getElementById('status');
+
+    // 1. Initialize Camera
+    async function initCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment" }, 
+                audio: false 
+            });
+            video.srcObject = stream;
+        } catch (err) {
+            status.innerText = "❌ Camera Error: " + err.message;
+            status.className = "status loading";
+        }
+    }
+
+    function onOpenCvReady() {
+        status.innerText = '✅ Ready to Inspect';
+        status.className = 'status ready';
+        compareBtn.disabled = false;
+        initCamera();
+    }
+
+    // 2. Capture Photo
+    captureBtn.onclick = () => {
+        const ctx = canvasTest.getContext('2d');
+        canvasTest.width = video.videoWidth;
+        canvasTest.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        status.innerText = "📸 Photo Captured!";
+    };
+
+    // 3. File Upload for Master
+    document.getElementById('masterUpload').onchange = (e) => {
+        const canvas = document.getElementById('canvasMaster');
+        const ctx = canvas.getContext('2d');
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const img = new Image();
+            img.onload = () => {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+            };
+            img.src = event.target.result;
+        };
+        reader.readAsDataURL(e.target.files[0]);
+    };
+
+    // 4. OpenCV Comparison Logic
+    compareBtn.onclick = function() {
+        try {
+            status.innerText = "🔄 Processing...";
+            let master = cv.imread('canvasMaster');
+            let test = cv.imread('canvasTest');
+            
+            let masterGray = new cv.Mat(), testGray = new cv.Mat();
+            cv.cvtColor(master, masterGray, cv.COLOR_RGBA2GRAY);
+            cv.cvtColor(test, testGray, cv.COLOR_RGBA2GRAY);
+
+            // Alignment using ORB
+            let orb = new cv.ORB(1000);
+            let kp1 = new cv.KeyPointVector(), kp2 = new cv.KeyPointVector();
+            let desc1 = new cv.Mat(), desc2 = new cv.Mat();
+            orb.detectAndCompute(masterGray, new cv.Mat(), kp1, desc1);
+            orb.detectAndCompute(testGray, new cv.Mat(), kp2, desc2);
+
+            let bf = new cv.BFMatcher(cv.NORM_HAMMING, true);
+            let matches = new cv.DMatchVector();
+            bf.match(desc1, desc2, matches);
+
+            let srcPointsData = [], dstPointsData = [];
+            for (let i = 0; i < Math.min(matches.size(), 50); i++) {
+                let m = matches.get(i);
+                dstPointsData.push(kp1.get(m.queryIdx).pt.x);
+                dstPointsData.push(kp1.get(m.queryIdx).pt.y);
+                srcPointsData.push(kp2.get(m.trainIdx).pt.x);
+                srcPointsData.push(kp2.get(m.trainIdx).pt.y);
+            }
+
+            let srcPoints = cv.matFromArray(srcPointsData.length / 2, 1, cv.CV_32FC2, srcPointsData);
+            let dstPoints = cv.matFromArray(dstPointsData.length / 2, 1, cv.CV_32FC2, dstPointsData);
+            let H = cv.findHomography(srcPoints, dstPoints, cv.RANSAC, 3.0);
+            
+            let aligned = new cv.Mat();
+            cv.warpPerspective(test, aligned, H, master.size());
+
+            // Diff detection
+            let alignedGray = new cv.Mat();
+            cv.cvtColor(aligned, alignedGray, cv.COLOR_RGBA2GRAY);
+            let diff = new cv.Mat();
+            cv.absdiff(masterGray, alignedGray, diff);
+            let thresh = new cv.Mat();
+            cv.threshold(diff, thresh, parseInt(document.getElementById('sensitivity').value), 255, cv.THRESH_BINARY);
+
+            let contours = new cv.MatVector(), hierarchy = new cv.Mat();
+            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            for (let i = 0; i < contours.size(); ++i) {
+                let rect = cv.boundingRect(contours.get(i));
+                if (rect.width > 15 || rect.height > 15) {
+                    cv.rectangle(aligned, new cv.Point(rect.x, rect.y), new cv.Point(rect.x + rect.width, rect.y + rect.height), [255, 0, 0, 255], 2);
+                }
+            }
+
+            cv.imshow('canvasOutput', aligned);
+            status.innerText = "✅ Analysis Complete";
+            downloadBtn.style.display = 'block';
+
+            // Clean up memory
+            master.delete(); test.delete(); masterGray.delete(); testGray.delete();
+            orb.delete(); kp1.delete(); kp2.delete(); desc1.delete(); desc2.delete();
+            srcPoints.delete(); dstPoints.delete(); H.delete(); aligned.delete();
+            alignedGray.delete(); diff.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+
+        } catch (err) {
+            status.innerText = "❌ Comparison Error: Check if images are clear.";
+            console.error(err);
+        }
+    };
+
+    // 5. Download Result
+    downloadBtn.onclick = () => {
+        const link = document.createElement('a');
+        link.download = 'inspection_result.png';
+        link.href = document.getElementById('canvasOutput').toDataURL();
+        link.click();
+    };
+</script>
+
+</body>
+</html>
